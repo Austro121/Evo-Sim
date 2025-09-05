@@ -1,6 +1,6 @@
 # Evo-Sim
 
-Version: 0.000.0a1
+Version: 0.001.0a1
 
 Evo-Sim is a work-in-progress evolution simulator where you can watch organisms adapt and evolve to better suit their environment. The project is designed to be flexible and customizable, with many new features on the way.
 
