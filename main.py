@@ -459,4 +459,253 @@ class World:
             self.spawn_resource('water')
         for _ in range(INITIAL_ORGANISMS):
             o = Organism(
+                x=random.uniform(0, WIDTH),
+                y=random.uniform(0, HEIGHT),
+                genes={
+                    'speed': random.uniform(0.5,1.6),
+                    'sense': random.uniform(6.0,18.0),
+                    'food_pref': random.uniform(-0.3,0.6),
+                    'water_pref': random.uniform(-0.3,0.6),
+                    'cautious': random.uniform(0.0,1.2),
+                    'repro_invest': random.uniform(0.2,0.8),
+                    'hide_skill': random.uniform(0.0,0.25),
+                    'poison_level': random.uniform(0.0,0.15),
+                    'camouflage': random.uniform(0.0,0.25),
+                    'social_tendency': random.uniform(0.0,0.7)
+                }
+            )
+            self.organisms.append(o)
+        for _ in range(INITIAL_PREDATORS):
+            p = Predator(
+                x=random.uniform(0, WIDTH),
+                y=random.uniform(0, HEIGHT),
+                genes={
+                    'speed': random.uniform(0.7,2.0),
+                    'sense': random.uniform(10.0,24.0),
+                    'poison_resist': random.uniform(0.0,0.4)
+                }
+            )
+            self.predators.append(p)
+
+    def spawn_resource(self, kind, spoiled=False):
+        amount = FOOD_ENERGY if kind=='food' else WATER_HYDRATION
+        r = Resource(x=random.uniform(0, WIDTH), y=random.uniform(0, HEIGHT), kind=kind, amount=amount, age=0, spoiled=spoiled)
+        self.resources.append(r)
+
+    def find_nearest(self, x, y, kind, sense):
+        best = None; bestd = None
+        for r in self.resources:
+            if r.kind != kind: continue
+            d = toroidal_distance((x,y),(r.x,r.y))
+            if d <= sense and (bestd is None or d < bestd):
+                best = r; bestd = d
+        return best, bestd
+
+    def find_nearest_pred(self, x, y, sense):
+        best = None; bestd = None
+        for p in self.predators:
+            d = toroidal_distance((x,y),(p.x,p.y))
+            if d <= sense and (bestd is None or d < bestd):
+                best = p; bestd = d
+        return best, bestd
+
+    def find_nearest_prey(self, x, y, sense):
+        best = None; bestd = None
+        for o in self.organisms:
+            eff_d = toroidal_distance((x,y),(o.x,o.y))
+            if eff_d <= sense * (1.0 + 0.2*o.genes.get('camouflage',0.0)):
+                if bestd is None or eff_d < bestd:
+                    best = o; bestd = eff_d
+        return best, bestd
+
+    def step(self):
+        self.step_count += 1
+
+        # age resources & handle spoilage/reproduction
+        for r in self.resources[:]:
+            r.age += 1
+            # spoil if reaches SPOIL_AGE
+            if r.kind=='food' and (not r.spoiled) and r.age >= SPOIL_AGE:
+                r.spoiled = True
+            # fresh food reproduction (seed)
+            if r.kind=='food' and (not r.spoiled) and len([x for x in self.resources if x.kind=='food']) < FOOD_MAX:
+                if random.random() < FOOD_REPRO_RATE:
+                    # seed new food nearby (small offset)
+                    nx = r.x + random.uniform(-3.5,3.5)
+                    ny = r.y + random.uniform(-3.5,3.5)
+                    nx, ny = wrap_pos(nx, ny)
+                    newr = Resource(x=nx, y=ny, kind='food', amount=FOOD_ENERGY, age=0, spoiled=False)
+                    self.resources.append(newr)
+
+        # spawn stochastic resources
+        for _ in range(np.random.poisson(SPAWN_FOOD_RATE)):
+            if len([r for r in self.resources if r.kind=='food']) < FOOD_MAX:
+                self.spawn_resource('food', spoiled=False)
+        for _ in range(np.random.poisson(SPAWN_WATER_RATE)):
+            if len([r for r in self.resources if r.kind=='water']) < WATER_MAX:
+                self.spawn_resource('water')
+
+        # step predators then organisms
+        for p in self.predators[:]:
+            p.step(self)
+        for o in self.organisms[:]:
+            o.step(self)
+
+        # analytics
+        self.organism_counts.append(len(self.organisms))
+        self.predator_counts.append(len(self.predators))
+        self.resource_counts.append(len(self.resources))
+        # track repro_invest average
+        if len(self.organisms)>0:
+            avg_repro = np.mean([o.genes.get('repro_invest',0.5) for o in self.organisms])
+        else:
+            avg_repro = 0.0
+        self.trait_history['repro_invest'].append(avg_repro)
+
+# ---------- GUI & visualization ----------
+def make_simulation_gui(output_file=None):
+    world = World()
+    world.initialize()
+
+    fig, ax = plt.subplots(figsize=(11,6))
+    plt.subplots_adjust(left=0.08, bottom=0.22)
+    ax.set_xlim(0, WIDTH); ax.set_ylim(0, HEIGHT)
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.set_title("Food-spoil Sim — green organisms, red predators, brown food (spoiled darker), blue water")
+
+    org_scatter = ax.scatter([], [], s=[], alpha=0.95)
+    pred_scatter = ax.scatter([], [], s=80, marker='X', alpha=0.9, c='darkred')
+    food_scatter = ax.scatter([], [], s=36, marker='s', alpha=0.8)
+    water_scatter = ax.scatter([], [], s=30, marker='o', alpha=0.65, c='deepskyblue')
+
+    stats_text = ax.text(0.01, 1.04, "", transform=ax.transAxes, va='bottom', fontsize=9)
+
+    is_running = {'val': True}
+    sim_speed = {'val': 1.0}
+
+    axpause = plt.axes([0.08, 0.06, 0.14, 0.06])
+    btn_pause = Button(axpause, 'Pause/Start')
+
+    axslider = plt.axes([0.26, 0.08, 0.45, 0.04])
+    slider_speed = Slider(axslider, 'Speed', 0.1, 6.0, valinit=1.0)
+
+    axgraph = plt.axes([0.74, 0.06, 0.14, 0.06])
+    btn_graph = Button(axgraph, 'Show Graphs')
+
+    def toggle_pause(event):
+        is_running['val'] = not is_running['val']
+    btn_pause.on_clicked(toggle_pause)
+    def change_speed(val): sim_speed['val'] = val
+    slider_speed.on_changed(change_speed)
+
+    def show_graphs(auto=False):
+        steps = list(range(len(world.organism_counts)))
+        figg, axs = plt.subplots(3,1, figsize=(10,9))
+        axs[0].plot(steps, world.organism_counts, label='Organisms', color='green')
+        axs[0].plot(steps, world.predator_counts, label='Predators', color='red')
+        axs[0].set_title('Population over time')
+        axs[0].legend(); axs[0].set_xlabel('Step'); axs[0].set_ylabel('Count')
+
+        # resources over time
+        axs[1].plot(steps, world.resource_counts, label='Resources', color='saddlebrown')
+        axs[1].set_title('Resources over time'); axs[1].legend()
+
+        # trait timeline: repro_invest avg
+        axs[2].plot(steps, world.trait_history['repro_invest'], label='Avg repro_invest', color='orange')
+        axs[2].set_title('Repro investment (average)'); axs[2].legend()
+
+        plt.tight_layout(); plt.show()
+
+        if auto and output_file:
+            savepath = os.path.splitext(output_file)[0] + '_analytics.png'
+            figg.savefig(savepath); print(f"Analytics saved to {savepath}")
+
+    btn_graph.on_clicked(lambda evt: show_graphs(auto=False))
+
+    def check_extinction_and_popup():
+        if len(world.organisms) == 0 or len(world.predators) == 0:
+            print("Extinction detected — popping up analytics...")
+            show_graphs(auto=True)
+
+    def update(frame):
+        if is_running['val']:
+            steps = max(1, int(round(sim_speed['val'])))
+            for _ in range(steps):
+                world.step()
+                if len(world.organisms) == 0 or len(world.predators) == 0:
+                    check_extinction_and_popup()
+                    is_running['val'] = False
+                    break
+
+        # draw organisms
+        ox = [o.x for o in world.organisms]
+        oy = [o.y for o in world.organisms]
+        sizes = [10 + 14*o.growth_progress + 8*o.genes.get('speed',1.0) for o in world.organisms]
+        colors = []
+        for o in world.organisms:
+            r = 0.15 + 0.5*o.genes.get('poison_level',0.0)
+            g = 0.4 + 0.6*o.growth_progress - 0.3*o.genes.get('hide_skill',0.0)
+            b = 0.15 + 0.5*o.genes.get('hide_skill',0.0)
+            if o.juvenile:
+                g *= 0.6; r *= 0.9; b *= 0.9
+            # if sick darken and shift color
+            if o.is_sick(world):
+                g *= 0.55; r *= 0.9; b *= 0.9
+            colors.append((clamp(r,0,1), clamp(g,0,1), clamp(b,0,1)))
+
+        px = [p.x for p in world.predators]
+        py = [p.y for p in world.predators]
+
+        fx = [r.x for r in world.resources if r.kind=='food']
+        fy = [r.y for r in world.resources if r.kind=='food']
+        # color food by freshness: fresh = light brown, spoiled = dark brown/gray
+        fcols = []
+        for r in [r for r in world.resources if r.kind=='food']:
+            if r.spoiled:
+                # severity influences darkness
+                severity = clamp((r.age - SPOIL_AGE)/float(max(1,SPOIL_SPAN)),0,1)
+                fcols.append((0.25, 0.15, 0.05 + 0.35*severity))
+            else:
+                fcols.append((0.62, 0.38, 0.14))
+
+        wx = [r.x for r in world.resources if r.kind=='water']
+        wy = [r.y for r in world.resources if r.kind=='water']
+
+        org_scatter.set_offsets(np.column_stack((ox,oy)) if len(ox)>0 else np.empty((0,2)))
+        org_scatter.set_sizes(sizes if len(sizes)>0 else [])
+        org_scatter.set_facecolors(colors if len(colors)>0 else [])
+
+        pred_scatter.set_offsets(np.column_stack((px,py)) if len(px)>0 else np.empty((0,2)))
+        food_scatter.set_offsets(np.column_stack((fx,fy)) if len(fx)>0 else np.empty((0,2)))
+        food_scatter.set_facecolors(fcols if len(fcols)>0 else [])
+        water_scatter.set_offsets(np.column_stack((wx,wy)) if len(wx)>0 else np.empty((0,2)))
+
+        avg_speed = np.mean([o.genes.get('speed',1.0) for o in world.organisms]) if world.organisms else 0.0
+        avg_sick = np.mean([1.0 if o.is_sick(world) else 0.0 for o in world.organisms]) if world.organisms else 0.0
+        stats = (f"Step: {world.step_count}  |  Organisms: {len(world.organisms)}  |  Predators: {len(world.predators)}\n"
+                 f"Avg speed: {avg_speed:.2f}  Avg sick_frac: {avg_sick:.2f}\n"
+                 f"Food: {len([r for r in world.resources if r.kind=='food'])}  Water: {len([r for r in world.resources if r.kind=='water'])}")
+        stats_text.set_text(stats)
+
+        return org_scatter, pred_scatter, food_scatter, water_scatter, stats_text
+
+    anim = animation.FuncAnimation(fig, update, frames=20000, interval=70, blit=False)
+    plt.show()
+    return world
+
+if __name__ == '__main__':
+    out = None
+    world = make_simulation_gui(output_file=out)
+    try:
+        if hasattr(world, 'organism_counts') and len(world.organism_counts)>0:
+            print("Simulation finished — displaying final analytics...")
+            steps = list(range(len(world.organism_counts)))
+            figf, axf = plt.subplots(figsize=(10,5))
+            axf.plot(steps, world.organism_counts, label='Organisms', color='green')
+            axf.plot(steps, world.predator_counts, label='Predators', color='red')
+            axf.set_title('Population over time (final)')
+            axf.legend(); axf.set_xlabel('Step'); axf.set_ylabel('Count')
+            plt.show()
+    except Exception as e:
+        print("Error showing final analytics:", e)
    
