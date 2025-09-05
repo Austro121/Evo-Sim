@@ -15,15 +15,29 @@ cd Evo-Sim
 
 Versioning
 
-This project uses Semantic Versioning:
+MAJOR.MINOR.PATCH[a|b|c][PRE-RELEASE NUMBER]
 
-MAJOR.MINOR.PATCH[a|b|f]
+a = alpha (early development, may be unstable)
 
-a = alpha
+b = beta (more stable, still testing)
 
-b = beta
+f = full release (production-ready)
 
-f = full release
+
+Pre-release number:
+
+Tracks iterations of pre-release versions for developers.
+
+For example:
+
+0.001.0a2 → second alpha release
+
+0.001.0b1 → first beta release
+
+
+This number does not reset when moving to a patch or minor release; it shows how many pre-release iterations existed before the current stable release.
+
+
 Keep an eye on the version to track stability and new features.
 
 
