@@ -1,6 +1,7 @@
 # Evo-Sim
 A work in progress evolution simulator where you can watch organisms evolve to better suit their environment. Many customization options are on their way.
 
+Version: 0.000.0a1
 
 This software is released under the GNU General Public License v3 (GPLv3), which allows you to:
 
